@@ -18,11 +18,17 @@ how to use the page table and disk interfaces.
 #include <errno.h>
 #include <time.h>
 
+/*
+struct my_queue{
+
+}
+*/
+
 int NFAULTS = 0;
 int NREADS = 0;
 int NWRITES = 0;
 
-int *FRAME_TABLE;
+int *FRAME_TABLE; // page number if full, -1 for empty
 int FREE_FRAMES;
 
 struct disk *disk;
@@ -32,15 +38,10 @@ char* algorithm;
 // get next free frame if no replacement algorithm necessary
 int find_free_frame(){
 	int i = 0;
-	while( FRAME_TABLE[i] ){
+	while( FRAME_TABLE[i] != -1 ){
 		i++;
 	}
 	return i;
-}
-
-int rand_algorithm(struct page_table *pt, int page){
-	int r_page = rand() % page_table_get_npages(pt);
-	return r_page;	
 }
 
 void page_fault_handler( struct page_table *pt, int page)
@@ -56,20 +57,20 @@ void page_fault_handler( struct page_table *pt, int page)
 
 	page_table_get_entry(pt, page, curr_frame_ptr, curr_bit_ptr);
 
-	printf("%d\n", *curr_bit_ptr);
 	// In physical memory but needs write bit
 	if( *curr_bit_ptr ){	
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ|PROT_WRITE);
 	} else if( FREE_FRAMES ){ // Fill a free frame
 		int frame = find_free_frame();
+		FREE_FRAMES--;
+		FRAME_TABLE[frame] = page;
 		page_table_set_entry(pt, page, frame, PROT_READ);
 		disk_read(disk, page, &physmem[frame * PAGE_SIZE]);
 		NREADS++;
 	} else{ // Do a replacement algorithm
-		printf("here");
 		int page_num;
 		if( !strcmp(algorithm, "rand") ){
-			page_num = rand_algorithm(pt, page);
+			page_num = FRAME_TABLE[ rand() % page_table_get_nframes(pt) ];
 		} else if( !strcmp(algorithm, "fifo") ){
 			exit(1);
 		} else{ // custom
@@ -78,17 +79,16 @@ void page_fault_handler( struct page_table *pt, int page)
 
 		// handle what is replaced
 		page_table_get_entry(pt, page_num, curr_frame_ptr, curr_bit_ptr);
-		printf("%d\n", *curr_frame_ptr);
-		// check if what's currently there is dirty
-		if( *curr_bit_ptr == PROT_WRITE ){
-			printf("num writes should increase\n");
+		if( *curr_bit_ptr == (PROT_READ|PROT_WRITE) ){ // dirty
 			disk_write(disk, page_num, &physmem[*curr_frame_ptr * PAGE_SIZE] );
 			NWRITES++;
 		}
-		
-		disk_read(disk, page, &physmem[page_num * PAGE_SIZE]);
+	
+		// update values	
+		disk_read(disk, page, &physmem[*curr_frame_ptr * PAGE_SIZE]);
 		NREADS++;
-		
+	
+		FRAME_TABLE[*curr_frame_ptr] = page;
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ);
 		page_table_set_entry(pt, page_num, *curr_frame_ptr, 0);
 
@@ -99,6 +99,7 @@ void page_fault_handler( struct page_table *pt, int page)
 int main( int argc, char *argv[] )
 {
 	srand(time(NULL));
+
 	// check and store command line arguments
 	if(argc!=5) {
 		printf("use: virtmem <npages> <nframes> <rand|fifo|custom> <sort|scan|focus>\n");
@@ -117,14 +118,6 @@ int main( int argc, char *argv[] )
 		return 1;
 	}
 
-	// initialize frame table
-	FRAME_TABLE = (int *)malloc(sizeof(int) * nframes);
-	FREE_FRAMES = nframes;
-	int i;
-	for( i = 0; i < nframes; i++ ){
-		FRAME_TABLE[i] = 0; // starts empty
-	}
-	
 	algorithm = argv[3];
 	if( strcmp(argv[3], "rand") && strcmp(argv[3], "fifo") && strcmp(argv[3], "custom") ){
 		printf("Must choose rand|fifo|custom for replacement algorithm.\n");
@@ -133,8 +126,15 @@ int main( int argc, char *argv[] )
 
 	const char *program = argv[4]; // error check implemented below
 
+	// initialize frame table
+	FRAME_TABLE = (int *)malloc(sizeof(int) * nframes);
+	FREE_FRAMES = nframes;
+	int i;
+	for( i = 0; i < nframes; i++ ){
+		FRAME_TABLE[i] = -1; // starts empty
+	}
+	
 	// Set up virtual disk space	
-	//struct disk *disk = disk_open("myvirtualdisk",npages);
 	disk = disk_open("myvirtualdisk",npages);
 	if(!disk) {
 		fprintf(stderr,"couldn't create virtual disk: %s\n",strerror(errno));
@@ -149,8 +149,6 @@ int main( int argc, char *argv[] )
 	}
 
 	char *virtmem = page_table_get_virtmem(pt);
-
-	char *physmem = page_table_get_physmem(pt);
 
 	// Check which program to run
 	if(!strcmp(program,"sort")) {
