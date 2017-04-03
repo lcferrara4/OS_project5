@@ -18,12 +18,6 @@ how to use the page table and disk interfaces.
 #include <errno.h>
 #include <time.h>
 
-/*
-struct my_queue{
-
-}
-*/
-
 int NFAULTS = 0;
 int NREADS = 0;
 int NWRITES = 0;
@@ -31,9 +25,43 @@ int NWRITES = 0;
 int *FRAME_TABLE; // page number if full, -1 for empty
 int FREE_FRAMES;
 
+int *FIFO_QUEUE;
+
 struct disk *disk;
 
 char* algorithm;
+
+// methods for fifo queue
+void queue_push(int f){
+	int i = 0;
+	while( FIFO_QUEUE[i] != -1 )
+		i++;
+
+	FIFO_QUEUE[i] = f;
+}
+
+// pop first element and move offer remaining
+int queue_pop(int n){
+	int popped = FIFO_QUEUE[0];
+
+	// move data over
+	int i;
+	for( i = 0; i < n-1; i++ ){
+		FIFO_QUEUE[i] = FIFO_QUEUE[i+1];
+	}
+	FIFO_QUEUE[n-1] = -1;
+	
+	return popped;
+}
+
+// for debugging only
+void print_queue(int n){
+	int i;
+	for( i = 0; i < n; i++ )
+		printf("%d ", FIFO_QUEUE[i]);
+	
+	printf("\n");
+}
 
 // get next free frame if no replacement algorithm necessary
 int find_free_frame(){
@@ -67,12 +95,19 @@ void page_fault_handler( struct page_table *pt, int page)
 		page_table_set_entry(pt, page, frame, PROT_READ);
 		disk_read(disk, page, &physmem[frame * PAGE_SIZE]);
 		NREADS++;
+
+		// add to queue if fifo
+		if( !strcmp(algorithm, "fifo") ){
+			queue_push(page);
+		}
+
 	} else{ // Do a replacement algorithm
 		int page_num;
 		if( !strcmp(algorithm, "rand") ){
 			page_num = FRAME_TABLE[ rand() % page_table_get_nframes(pt) ];
 		} else if( !strcmp(algorithm, "fifo") ){
-			exit(1);
+			page_num = queue_pop(page_table_get_nframes(pt));
+			queue_push(page);
 		} else{ // custom
 			exit(1);
 		}
@@ -133,6 +168,15 @@ int main( int argc, char *argv[] )
 	for( i = 0; i < nframes; i++ ){
 		FRAME_TABLE[i] = -1; // starts empty
 	}
+
+	// initialize fifo queue if fifo chosen
+	if( !strcmp(argv[3], "fifo") ){
+		FIFO_QUEUE = (int *)malloc(sizeof(int) * nframes);
+        	int i;
+        	for( i = 0; i < nframes; i++ ){
+                	FIFO_QUEUE[i] = -1; // starts empty
+        	}
+	}
 	
 	// Set up virtual disk space	
 	disk = disk_open("myvirtualdisk",npages);
@@ -169,6 +213,7 @@ int main( int argc, char *argv[] )
 	page_table_delete(pt);
 	disk_close(disk);
 	free(FRAME_TABLE);
+	free(FIFO_QUEUE);
 
 	// Print results
 	printf("Number of page faults: %d\n", NFAULTS);
