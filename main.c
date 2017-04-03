@@ -30,11 +30,8 @@ int FREE_FRAMES;
 int *FIFO_QUEUE;
 int NQUEUE = 0;
 
-// for custom - avoid disk writes
-int *NON_DIRTY;
-int NNDIRTY = 0;
-
-int *COMMON_FAULTS;
+// for custom - keeps track of use bits
+int *USE_BITS;
 
 struct disk *disk;
 
@@ -66,24 +63,6 @@ int queue_pop(int n){
 	return popped;
 }
 
-void queue_reorder(int p, int npages){
-	int index = 0;
-	while( FIFO_QUEUE[index] != p ){
-		index++;
-	}
-	FIFO_QUEUE[index] = FIFO_QUEUE[NQUEUE-1];
-	FIFO_QUEUE[NQUEUE-1] = p;
-}
-
-// for debugging only
-void print_queue(int n){
-	int i;
-	for( i = 0; i < n; i++ )
-		printf("%d ", FIFO_QUEUE[i]);
-	
-	printf("\n");
-}
-
 // get next free frame if no replacement algorithm necessary
 int find_free_frame(){
 	int i = 0;
@@ -93,79 +72,9 @@ int find_free_frame(){
 	return i;
 }
 
-
-// ATTEMPT AT CUSTOM
-void non_dirty_push(int f){
-        int i = 0;
-        while( NON_DIRTY[i] != -1 )
-                i++;
-
-        NON_DIRTY[i] = f;
-        NNDIRTY++;
-}
-
-int non_dirty_pop(int nframes){
-        int popped = NON_DIRTY[0];
- 
-       // move data over
-        int i;
-        for( i = 0; i < nframes-1; i++ ){
-                NON_DIRTY[i] = NON_DIRTY[i+1];
-        }
-        NON_DIRTY[nframes-1] = -1;
-        NNDIRTY--;
-
-        return popped;
-}
-
-void remove_dirty(int f){
-        int index = 0;
-        while( NON_DIRTY[index] != f ){
-                index++;
-        }
-        NON_DIRTY[index] = NON_DIRTY[NNDIRTY-1];
-        NON_DIRTY[NNDIRTY-1] = -1;
-	NNDIRTY--;
-}
-
-/*
-int find_nondirty(int f, int n){
-	int frame = f;
-	while( DIRTY[frame] ){
-	printf("find nondirty executing\n");
-		frame++;
-		if( frame == n ){
-			frame = 0;
-		}
-	}
-	printf("%d\n", FRAME_TABLE[frame]);
-	return FRAME_TABLE[frame];
-}
-*/
-int find_min_faults(int nframes){
-	int minimum = INT_MAX;
-	int min_page = 0;
-	int curr_page = 0;
-	int i;
-	for( i = 0; i < nframes; i++ ){
-		curr_page = FRAME_TABLE[i];
-		if( curr_page != -1 ){
-			if( COMMON_FAULTS[curr_page] < minimum ){
-				minimum = COMMON_FAULTS[curr_page];
-				min_page = curr_page;
-			}
-		}
-	}
-	return min_page;
-}
-
 void page_fault_handler( struct page_table *pt, int page)
 {
 	NFAULTS++;
-	
-	if ( !strcmp(algorithm, "custom") ){	
-		COMMON_FAULTS[page]++;
-	}
 
 	printf("page fault on page #%d\n",page);
 
@@ -181,10 +90,6 @@ void page_fault_handler( struct page_table *pt, int page)
 	if( *curr_bit_ptr ){	
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ|PROT_WRITE);
 
-		if( !strcmp(algorithm, "custom") ){
-			remove_dirty(*curr_frame_ptr);
-		}
-
 	} else if( FREE_FRAMES ){ // Fill a free frame
 		int frame = find_free_frame();
 		FREE_FRAMES--;
@@ -194,13 +99,9 @@ void page_fault_handler( struct page_table *pt, int page)
 		NREADS++;
 
 		// add to queue if fifo
-		if( !strcmp(algorithm, "fifo") || !strcmp(algorithm, "custom") ){
+		if( !strcmp(algorithm, "fifo") ){
 			queue_push(page);
 		}
-		if( !strcmp(algorithm, "custom") ){
-			non_dirty_push(frame);
-		}
-		
 
 	} else{ // Do a replacement algorithm
 		int page_num;
@@ -210,26 +111,13 @@ void page_fault_handler( struct page_table *pt, int page)
 			page_num = queue_pop(page_table_get_npages(pt));
 			queue_push(page);
 		} else if ( !strcmp(algorithm, "custom") ){ // custom
-			if( NNDIRTY > 0 ){
-				int frame_num = non_dirty_pop(page_table_get_nframes(pt));
-				page_num = FRAME_TABLE[frame_num];
-			} else{
-				page_num = find_min_faults(page_table_get_nframes(pt));
+			page_num  = rand() % page_table_get_npages(pt); // start at random page
+			while( USE_BITS[page_num] || page_num == page ){
+				USE_BITS[page_num] = 0;
+				page_num++;
+				if (page_num == page_table_get_npages(pt))
+					page_num = 0;
 			}
-			//queue_push(page);
-			/*	
-			// first random
-			int f = rand() % page_table_get_nframes(pt); // random frame
-			printf("%d\n", NDIRTY);
-			if( NDIRTY == page_table_get_nframes(pt) ){
-				// all dirty so random
-				page_num = FRAME_TABLE[ f ];
-			} else{
-				// then find next non-dirty
-				page_num = find_nondirty(f, page_table_get_nframes(pt));
-			}
-			*/
-
 		}
 
 		// handle what is replaced
@@ -237,13 +125,6 @@ void page_fault_handler( struct page_table *pt, int page)
 		if( *curr_bit_ptr == (PROT_READ|PROT_WRITE) ){ // dirty
 			disk_write(disk, page_num, &physmem[*curr_frame_ptr * PAGE_SIZE] );
 			NWRITES++;
-	
-			/*
-			if( !strcmp(algorithm, "custom") ){
-				DIRTY[*curr_frame_ptr] = 0;
-				NDIRTY--;
-			}
-			*/
 		}
 	
 		// update values	
@@ -253,11 +134,12 @@ void page_fault_handler( struct page_table *pt, int page)
 		FRAME_TABLE[*curr_frame_ptr] = page;
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ);
 		page_table_set_entry(pt, page_num, *curr_frame_ptr, 0);
-
-                if( !strcmp(algorithm, "custom") ){
-                        non_dirty_push(*curr_frame_ptr);
-                }
 	} 
+	
+	if ( !strcmp(algorithm, "custom") ){	
+		USE_BITS[page] = 1;
+	}
+
 	page_table_print(pt);
 }
 
@@ -308,18 +190,13 @@ int main( int argc, char *argv[] )
         	}
 	}
 
-        // initialize non-dirty frame bit queue if custom chosen
+        // initialize use-bit array if custom chosen
         if( !strcmp(argv[3], "custom") ){
-               	NON_DIRTY = (int *)malloc(sizeof(int) * nframes);
-		int i;
-		for( i = 0; i < nframes; i++ ){
-			NON_DIRTY[i] = -1; // starts empty
-		}
-		COMMON_FAULTS = (int *)malloc(sizeof(int) * npages);
+        	USE_BITS = (int *)malloc(sizeof(int) * npages);
                 for( i = 0; i < npages; i++ ){
-                        COMMON_FAULTS[i] = 0; // starts empty
+                        USE_BITS[i] = 0; // starts initialized to 0s
                 }
-        }
+	}
 	
 	// Set up virtual disk space	
 	disk = disk_open("myvirtualdisk",npages);
@@ -357,8 +234,7 @@ int main( int argc, char *argv[] )
 	disk_close(disk);
 	free(FRAME_TABLE);
 	free(FIFO_QUEUE);
-	free(NON_DIRTY);
-	free(COMMON_FAULTS);
+	free(USE_BITS);
 
 	// Print results
 	printf("Number of page faults: %d\n", NFAULTS);
