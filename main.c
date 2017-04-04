@@ -1,5 +1,4 @@
 // Lauren Ferrara and Emily Obaditch
-
 /*
 Main program for the virtual memory project.
 Make all of your modifications to this file.
@@ -76,7 +75,7 @@ int find_free_frame(){
 
 void page_fault_handler( struct page_table *pt, int page)
 {
-	//page_table_set_entry(pt,page,page,PROT_READ|PROT_WRITE);	
+	printf("Page faulted on = %d\n", page);
 	NFAULTS++;
 	
 	char *physmem = page_table_get_physmem(pt);
@@ -90,7 +89,10 @@ void page_fault_handler( struct page_table *pt, int page)
 
 	if( *curr_bit_ptr ){ // In physical memory but needs write bit
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ|PROT_WRITE);
-		DIRTY_BITS[page] = 1;
+		if ( !strcmp(algorithm, "custom") ){
+			DIRTY_BITS[page] = 1;
+		}
+		printf("Wrote to page %d\n", page);
 	} else if( FREE_FRAMES ){ // Fill a free frame
 		int frame = find_free_frame();
 		FREE_FRAMES--;
@@ -115,33 +117,35 @@ void page_fault_handler( struct page_table *pt, int page)
 			int frame_num  = rand() % page_table_get_nframes(pt); // start at random frame
 			page_num = FRAME_TABLE[frame_num]; // maps to random page
 			// iterate through USE_BITS until find a 0
-			while( (USE_BITS[page_num] || DIRTY_BITS[page_num]) ){
-				//USE_BITS[page_num] = 0;
+			int count = 0;
+			while( (USE_BITS[page_num] || DIRTY_BITS[page_num]) && count < page_table_get_nframes(pt) ){
 				frame_num++;
 				if (frame_num == page_table_get_nframes(pt))
-					break; // go to start of array
+					frame_num = 0; // go to start of array
 				page_num = FRAME_TABLE[frame_num];
+				count++;
 			}
-			if( frame_num == page_table_get_nframes(pt) ){
-				frame_num = 0;
-				page_num = FRAME_TABLE[frame_num];
-				while( USE_BITS[page_num] ){
-					USE_BITS[page_num] = 0;
+			if( count == page_table_get_nframes(pt) ){ // every frame has dirty page
+				count = 0;
+				while( USE_BITS[page_num] && count < page_table_get_nframes(pt) ){
 					frame_num++;
+					USE_BITS[page_num] = 0;
 					if (frame_num == page_table_get_nframes(pt))
 						frame_num = 0; // go to start of array
 					page_num = FRAME_TABLE[frame_num];
+					count++;
 				}
-			} else{
-				USE_BITS[page_num] = 0;
 			}
+			USE_BITS[page_num] = 0;
 		}
 
 		// handle what is replaced
 		page_table_get_entry(pt, page_num, curr_frame_ptr, curr_bit_ptr);
 		if( *curr_bit_ptr == (PROT_READ|PROT_WRITE) ){ // dirty
 			disk_write(disk, page_num, &physmem[*curr_frame_ptr * PAGE_SIZE] );
-			DIRTY_BITS[page_num] = 0;
+			if ( !strcmp(algorithm, "custom") ){
+				DIRTY_BITS[page_num] = 0;
+			}
 			NWRITES++;
 		}
 	
@@ -151,7 +155,10 @@ void page_fault_handler( struct page_table *pt, int page)
 		FRAME_TABLE[*curr_frame_ptr] = page;
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ);
 		page_table_set_entry(pt, page_num, *curr_frame_ptr, 0);
+		
+		printf("Replaced page = %d from frame = %d\n", page_num, *curr_frame_ptr);
 	} 
+	printf("-------------------------------------\n");
 
 	// set use bit for page faulted on to 1 - recently used	
 	if ( !strcmp(algorithm, "custom") ){	
@@ -161,7 +168,7 @@ void page_fault_handler( struct page_table *pt, int page)
 
 int main( int argc, char *argv[] )
 {
-	srand(time(NULL));
+	srand(time(0));
 
 	// check and store command line arguments
 	if(argc!=5) {
