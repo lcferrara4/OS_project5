@@ -19,16 +19,17 @@ how to use the page table and disk interfaces.
 #include <time.h>
 #include <limits.h>
 
+// Variables for result output
 int NFAULTS = 0;
 int NREADS = 0;
 int NWRITES = 0;
 
 int *FRAME_TABLE; // page number if full, -1 for empty
-int FREE_FRAMES;
+int FREE_FRAMES; // number of free frames
 
 // for fifo
 int *FIFO_QUEUE;
-int NQUEUE = 0;
+int NQUEUE = 0; // number of pages in fifo queue
 
 // for custom - keeps track of use bits
 int *USE_BITS;
@@ -47,7 +48,7 @@ void queue_push(int p){
 	NQUEUE++;
 }
 
-// pop first element and move offer remaining
+// pop first element and move over remaining
 int queue_pop(int n){
 	int popped = FIFO_QUEUE[0];
 
@@ -57,7 +58,7 @@ int queue_pop(int n){
 		FIFO_QUEUE[i] = FIFO_QUEUE[i+1];
 		i++;
 	}
-	FIFO_QUEUE[n-1] = -1;
+	FIFO_QUEUE[n-1] = -1; // set last spot to empty
 	NQUEUE--;
 	
 	return popped;
@@ -76,18 +77,16 @@ void page_fault_handler( struct page_table *pt, int page)
 {
 	NFAULTS++;
 
-	printf("page fault on page #%d\n",page);
-
 	char *physmem = page_table_get_physmem(pt);
 	int curr_frame = -1;
 	int* curr_frame_ptr = &curr_frame;
 	int curr_bit = -1;
 	int* curr_bit_ptr = &curr_bit;
 
+	// Get bits to check if read or write faults
 	page_table_get_entry(pt, page, curr_frame_ptr, curr_bit_ptr);
 
-	// In physical memory but needs write bit
-	if( *curr_bit_ptr ){	
+	if( *curr_bit_ptr ){ // In physical memory but needs write bit
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ|PROT_WRITE);
 
 	} else if( FREE_FRAMES ){ // Fill a free frame
@@ -112,11 +111,12 @@ void page_fault_handler( struct page_table *pt, int page)
 			queue_push(page);
 		} else if ( !strcmp(algorithm, "custom") ){ // custom
 			page_num  = rand() % page_table_get_npages(pt); // start at random page
+			// iterate through USE_BITS until find a 0
 			while( USE_BITS[page_num] || page_num == page ){
 				USE_BITS[page_num] = 0;
 				page_num++;
 				if (page_num == page_table_get_npages(pt))
-					page_num = 0;
+					page_num = 0; // go to start of array
 			}
 		}
 
@@ -130,17 +130,15 @@ void page_fault_handler( struct page_table *pt, int page)
 		// update values	
 		disk_read(disk, page, &physmem[*curr_frame_ptr * PAGE_SIZE]);
 		NREADS++;
-	
 		FRAME_TABLE[*curr_frame_ptr] = page;
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ);
 		page_table_set_entry(pt, page_num, *curr_frame_ptr, 0);
 	} 
-	
+
+	// set use bit for page faulted on to 1 - recently used	
 	if ( !strcmp(algorithm, "custom") ){	
 		USE_BITS[page] = 1;
 	}
-
-	page_table_print(pt);
 }
 
 int main( int argc, char *argv[] )
@@ -212,6 +210,7 @@ int main( int argc, char *argv[] )
 		return 1;
 	}
 
+	// Get variable for virtual memory
 	char *virtmem = page_table_get_virtmem(pt);
 
 	// Check which program to run
@@ -226,6 +225,7 @@ int main( int argc, char *argv[] )
 
 	} else {
 		fprintf(stderr,"unknown program: %s\n",argv[3]);
+		printf("use: virtmem <npages> <nframes> <rand|fifo|custom> <sort|scan|focus>\n");
 		return 1;
 	}
 
