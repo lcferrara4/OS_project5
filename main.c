@@ -33,6 +33,7 @@ int NQUEUE = 0; // number of pages in fifo queue
 
 // for custom - keeps track of use bits
 int *USE_BITS;
+int *DIRTY_BITS;
 
 struct disk *disk;
 
@@ -75,8 +76,9 @@ int find_free_frame(){
 
 void page_fault_handler( struct page_table *pt, int page)
 {
+	//page_table_set_entry(pt,page,page,PROT_READ|PROT_WRITE);	
 	NFAULTS++;
-
+	
 	char *physmem = page_table_get_physmem(pt);
 	int curr_frame = -1;
 	int* curr_frame_ptr = &curr_frame;
@@ -88,7 +90,7 @@ void page_fault_handler( struct page_table *pt, int page)
 
 	if( *curr_bit_ptr ){ // In physical memory but needs write bit
 		page_table_set_entry(pt, page, *curr_frame_ptr, PROT_READ|PROT_WRITE);
-
+		DIRTY_BITS[page] = 1;
 	} else if( FREE_FRAMES ){ // Fill a free frame
 		int frame = find_free_frame();
 		FREE_FRAMES--;
@@ -110,13 +112,28 @@ void page_fault_handler( struct page_table *pt, int page)
 			page_num = queue_pop(page_table_get_npages(pt));
 			queue_push(page);
 		} else if ( !strcmp(algorithm, "custom") ){ // custom
-			page_num  = rand() % page_table_get_npages(pt); // start at random page
+			int frame_num  = rand() % page_table_get_nframes(pt); // start at random frame
+			page_num = FRAME_TABLE[frame_num]; // maps to random page
 			// iterate through USE_BITS until find a 0
-			while( USE_BITS[page_num] || page_num == page ){
+			while( (USE_BITS[page_num] || DIRTY_BITS[page_num]) ){
+				//USE_BITS[page_num] = 0;
+				frame_num++;
+				if (frame_num == page_table_get_nframes(pt))
+					break; // go to start of array
+				page_num = FRAME_TABLE[frame_num];
+			}
+			if( frame_num == page_table_get_nframes(pt) ){
+				frame_num = 0;
+				page_num = FRAME_TABLE[frame_num];
+				while( USE_BITS[page_num] ){
+					USE_BITS[page_num] = 0;
+					frame_num++;
+					if (frame_num == page_table_get_nframes(pt))
+						frame_num = 0; // go to start of array
+					page_num = FRAME_TABLE[frame_num];
+				}
+			} else{
 				USE_BITS[page_num] = 0;
-				page_num++;
-				if (page_num == page_table_get_npages(pt))
-					page_num = 0; // go to start of array
 			}
 		}
 
@@ -124,6 +141,7 @@ void page_fault_handler( struct page_table *pt, int page)
 		page_table_get_entry(pt, page_num, curr_frame_ptr, curr_bit_ptr);
 		if( *curr_bit_ptr == (PROT_READ|PROT_WRITE) ){ // dirty
 			disk_write(disk, page_num, &physmem[*curr_frame_ptr * PAGE_SIZE] );
+			DIRTY_BITS[page_num] = 0;
 			NWRITES++;
 		}
 	
@@ -191,8 +209,10 @@ int main( int argc, char *argv[] )
         // initialize use-bit array if custom chosen
         if( !strcmp(argv[3], "custom") ){
         	USE_BITS = (int *)malloc(sizeof(int) * npages);
+        	DIRTY_BITS = (int *)malloc(sizeof(int) * npages);
                 for( i = 0; i < npages; i++ ){
                         USE_BITS[i] = 0; // starts initialized to 0s
+                        DIRTY_BITS[i] = 0; // starts initialized to 0s
                 }
 	}
 	
@@ -235,6 +255,7 @@ int main( int argc, char *argv[] )
 	free(FRAME_TABLE);
 	free(FIFO_QUEUE);
 	free(USE_BITS);
+	free(DIRTY_BITS);
 
 	// Print results
 	printf("Number of page faults: %d\n", NFAULTS);
