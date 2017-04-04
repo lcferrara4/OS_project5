@@ -102,9 +102,9 @@ void page_fault_handler( struct page_table *pt, int page)
 		NREADS++;
 
 		// add to queue if fifo
-		//if( !strcmp(algorithm, "fifo") ){
-		//	queue_push(page);
-		//}
+		if( !strcmp(algorithm, "fifo") ){
+			queue_push(page);
+		}
 
 	} else{ // Do a replacement algorithm
 		int page_num;
